@@ -23,14 +23,13 @@ import mediapipe as mp
 
 mp_face_mesh = mp.solutions.face_mesh
 
-# ---------------- Hermes theme (white + blue) ----------------
-# NOTE: OpenCV works in BGR. Values below are stored as BGR (blue channel
-# highest for blue colors). The RGB equivalents are in the comments.
-ACCENT_BLUE   = (244, 133, 66)   # BGR of RGB(66,133,244)  -> bright Hermes blue
-SILHOUETTE    = (244, 133, 66)   # BGR of RGB(66,133,244)  -> silhouette fill
-OUTLINE_WHITE = (255, 255, 255)  # white contour / accent
-BG_TOP        = (138, 58, 30)    # BGR of RGB(30,58,138)   -> gradient top (deep blue)
-BG_BOTTOM     = (35, 16, 10)     # BGR of RGB(10,16,35)    -> gradient bottom (navy)
+# ---------------- Hermes brand palette (white + royal blue) ----------------
+# OpenCV uses BGR; RGB equivalents in comments. Matches hermes-agent.nousresearch.com
+ACCENT_BLUE   = (235, 99, 37)     # BGR of #2563eb royal blue (frame/border)
+SILHOUETTE    = (246, 150, 59)    # BGR of #3b96f6 lighter blue (face fill)
+OUTLINE_WHITE = (255, 255, 255)   # white contour / accent / features
+BG_TOP        = (245, 110, 35)    # BGR of #236ef5 bright royal blue
+BG_BOTTOM     = (216, 78, 29)     # BGR of #1d4ed8 deeper royal blue
 NAME          = "HERMES"
 NAME_ACCENT   = "◆"              # little hermes mark next to the name
 
@@ -47,7 +46,7 @@ BROW_RIGHT = [285, 295, 282, 283, 276]
 LIPS_OUTER = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185]
 LIPS_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95]
 NOSE = [168, 6, 197, 195, 5, 4, 1, 19, 94]
-FEATURE = (12, 20, 45)  # BGR dark navy feature lines (bolder) on the blue fill
+FEATURE = (255, 255, 255)  # white feature lines (Hermes brand)
 
 
 def build_gradient(w, h, top=BG_TOP, bottom=BG_BOTTOM):
@@ -116,18 +115,17 @@ def draw_glow_border(frame, color=OUTLINE_WHITE, width=3):
 
 
 def draw_nameplate(frame, text=NAME, mark=NAME_ACCENT):
-    """White nameplate, bottom-left, with the Hermes mark."""
+    """White nameplate, bottom-left, with the Hermes mark (brand)."""
     h, w = frame.shape[:2]
     font = cv2.FONT_HERSHEY_SIMPLEX
     label = f"{mark}  {text}"
     (tw, th), _ = cv2.getTextSize(label, font, 0.9, 2)
     bx1, by1 = 24, h - 54
     bx2, by2 = bx1 + tw + 36, by1 + th + 34
-    cv2.rectangle(frame, (bx1, by1), (bx2, by2), (8, 12, 28), -1)          # plate
+    cv2.rectangle(frame, (bx1, by1), (bx2, by2), OUTLINE_WHITE, -1)        # white plate
     cv2.rectangle(frame, (bx1, by1), (bx2, by2), ACCENT_BLUE, 2)           # blue edge
     cv2.putText(frame, label, (bx1 + 20, by1 + th + 12), font, 0.9,
-                OUTLINE_WHITE, 2, cv2.LINE_AA)
-
+                ACCENT_BLUE, 2, cv2.LINE_AA)
 
 class HermesWebcam:
     def __init__(self, cam_index=0, width=1280, height=720, fps=30,

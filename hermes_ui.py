@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import numpy as np
 import cv2
@@ -29,12 +29,12 @@ import mediapipe as mp
 PORT = 8711
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# ---- Hermes theme (BGR) ----
-ACCENT_BLUE = (244, 133, 66)
-SILHOUETTE = (244, 133, 66)
-OUTLINE_WHITE = (255, 255, 255)
-BG_TOP = (138, 58, 30)
-BG_BOTTOM = (35, 16, 10)
+# ---- Hermes brand palette (BGR) — bright royal blue + white ----
+ACCENT_BLUE = (235, 99, 37)    # BGR of #2563eb royal blue (frame/border)
+SILHOUETTE = (246, 150, 59)    # BGR of #3b96f6 lighter blue (face fill)
+OUTLINE_WHITE = (255, 255, 255)  # white outline + features (brand)
+BG_TOP = (245, 110, 35)        # BGR of #236ef5 bright royal blue
+BG_BOTTOM = (216, 78, 29)      # BGR of #1d4ed8 deeper royal blue
 NAME = "HERMES"
 
 # Standard 468-landmark face-oval contour.
@@ -48,6 +48,7 @@ _state = {
     "lock": threading.Lock(),
     "obsenabled": False,
     "vcam": None,
+    "voiceproc": None,   # subprocess for the voice shifter
 }
 
 mp_face_mesh = mp.solutions.face_mesh
@@ -69,7 +70,7 @@ BROW_RIGHT = [285, 295, 282, 283, 276]
 LIPS_OUTER = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185]
 LIPS_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95]
 NOSE = [168, 6, 197, 195, 5, 4, 1, 19, 94]
-FEATURE = (12, 20, 45)   # BGR dark navy feature lines (bolder) on the blue fill
+FEATURE = (255, 255, 255)  # white feature lines (Hermes brand)
 
 
 def _pts(lm, idxs, w, h):
@@ -153,11 +154,11 @@ def process_frame(frame_bgr, ts_ms):
     (tw, th), _ = cv2.getTextSize(label, font, 0.9, 2)
     bx1, by1 = 24, h - 54
     cv2.rectangle(out, (bx1, by1), (bx1 + tw + 36, by1 + th + 34),
-                  (8, 12, 28), -1)
+                  OUTLINE_WHITE, -1)
     cv2.rectangle(out, (bx1, by1), (bx1 + tw + 36, by1 + th + 34),
                   ACCENT_BLUE, 2)
     cv2.putText(out, label, (bx1 + 20, by1 + th + 12), font, 0.9,
-                OUTLINE_WHITE, 2, cv2.LINE_AA)
+                ACCENT_BLUE, 2, cv2.LINE_AA)
     return out
 
 
@@ -184,6 +185,37 @@ def send_to_obs(bgr):
         print(f"[hermes] OBS vcam error: {e}")
         s["vcam"] = None
         s["obsenabled"] = False
+
+
+def voice_start(ratio, tilt):
+    """Launch the voice shifter subprocess (blocking stream)."""
+    s = _state
+    p = s["voiceproc"]
+    if p and p.poll() is None:
+        return {"ok": False, "msg": "voice already running"}
+    py = sys.executable
+    logf = open(os.path.join(HERE, "voice.log"), "ab")
+    proc = subprocess.Popen(
+        [py, os.path.join(HERE, "voice_shifter.py"),
+         "--ratio", str(ratio), "--tilt", str(tilt)],
+        cwd=HERE, stdout=logf, stderr=subprocess.STDOUT)
+    s["voiceproc"] = proc
+    return {"ok": True, "msg": f"voice shifter starting (pid {proc.pid})"}
+
+
+def voice_stop():
+    s = _state
+    p = s["voiceproc"]
+    if not p:
+        return {"ok": True, "msg": "voice not running"}
+    if p.poll() is None:
+        p.terminate()
+        try:
+            p.wait(timeout=5)
+        except Exception:
+            p.kill()
+    s["voiceproc"] = None
+    return {"ok": True, "msg": "voice shifter stopped"}
 
 
 HTML = """<!DOCTYPE html>
@@ -244,6 +276,29 @@ HTML = """<!DOCTYPE html>
       <button class="on wide" onclick="setObs(true)">Enable OBS Stream</button>
       <button class="off wide" style="margin-top:8px" onclick="setObs(false)">Disable OBS Stream</button>
       <div class="hint2">With OBS open: <b>Start Virtual Camera</b>, then add a <b>Video Capture Device</b> source → <b>OBS Virtual Camera</b>. Start OBS stream before enabling here.</div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <div><div class="name">Voice Shifter</div>
+          <div class="hint">Real-time pitch + timbre disguise</div></div>
+        <span class="status st-off" id="st-voice">off</span>
+      </div>
+      <div class="row" style="border:none">
+        <div style="flex:1;margin-right:12px">
+          <div class="hint">Pitch (0.5–1.3, lower = deeper)</div>
+          <input type="range" id="ratio" min="0.5" max="1.3" step="0.01" value="0.85" style="width:100%">
+          <div class="hint" id="ratioLbl">0.85</div>
+        </div>
+        <div style="flex:1">
+          <div class="hint">Timbre tilt (dB)</div>
+          <input type="range" id="tilt" min="-6" max="6" step="0.5" value="1.5" style="width:100%">
+          <div class="hint" id="tiltLbl">+1.5</div>
+        </div>
+      </div>
+      <button class="on wide" onclick="voice('start')">Start Voice Shifter</button>
+      <button class="off wide" style="margin-top:8px" onclick="voice('stop')">Stop Voice Shifter</button>
+      <div class="hint2">Picks up your default mic and applies the pitch shift live. Route this output to OBS as your mic source for streaming.</div>
     </div>
   </div>
 </div>
@@ -309,6 +364,20 @@ async function setObs(on){
   document.getElementById('st-obs').textContent=d.obs?'on':'off';
   document.getElementById('st-obs').className='status '+(d.obs?'st-on':'st-off');
 }
+
+// voice control
+document.getElementById('ratio').oninput=e=>document.getElementById('ratioLbl').textContent=e.target.value;
+document.getElementById('tilt').oninput=e=>document.getElementById('tiltLbl').textContent=(+e.target.value>=0?'+':'')+e.target.value;
+async function voice(act){
+  const ratio=document.getElementById('ratio').value;
+  const tilt=document.getElementById('tilt').value;
+  const r=await fetch(`/api/voice/${act}?ratio=${ratio}&tilt=${tilt}`);
+  const d=await r.json();
+  const el=document.getElementById('st-voice');
+  el.textContent=d.running?'on':'off';
+  el.className='status '+(d.running?'st-on':'st-off');
+  statusline.textContent=d.msg||statusline.textContent;
+}
 </script>
 </body>
 </html>
@@ -346,6 +415,17 @@ class Handler(BaseHTTPRequestHandler):
                     pass
                 _state["vcam"] = None
             return self._send_json({"obs": False})
+        if u.path.startswith("/api/voice/"):
+            act = u.path.split("/api/voice/")[1]
+            q = parse_qs(u.query)
+            running = bool(_state["voiceproc"] and _state["voiceproc"].poll() is None)
+            if act == "start":
+                ratio = float(q.get("ratio", ["0.85"])[0])
+                tilt = float(q.get("tilt", ["1.5"])[0])
+                return self._send_json({**voice_start(ratio, tilt), "running": True})
+            if act == "stop":
+                return self._send_json({**voice_stop(), "running": False})
+            return self._send_json({"running": running})
         self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
