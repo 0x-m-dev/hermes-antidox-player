@@ -217,18 +217,21 @@ def send_to_obs(bgr):
         s["obsenabled"] = False
 
 
-def voice_start(ratio, tilt):
+def voice_start(ratio, tilt, formant=None, preset=None):
     """Launch the voice shifter subprocess (blocking stream)."""
     s = _state
     p = s["voiceproc"]
     if p and p.poll() is None:
         return {"ok": False, "msg": "voice already running"}
     py = sys.executable
+    args = [py, os.path.join(HERE, "voice_shifter.py"),
+            "--ratio", str(ratio), "--tilt", str(tilt)]
+    if formant is not None:
+        args += ["--formant", str(formant)]
+    if preset:
+        args += ["--preset", preset]
     logf = open(os.path.join(HERE, "voice.log"), "ab")
-    proc = subprocess.Popen(
-        [py, os.path.join(HERE, "voice_shifter.py"),
-         "--ratio", str(ratio), "--tilt", str(tilt)],
-        cwd=HERE, stdout=logf, stderr=subprocess.STDOUT)
+    proc = subprocess.Popen(args, cwd=HERE, stdout=logf, stderr=subprocess.STDOUT)
     s["voiceproc"] = proc
     return {"ok": True, "msg": f"voice shifter starting (pid {proc.pid})"}
 
@@ -311,7 +314,7 @@ HTML = """<!DOCTYPE html>
     <div class="panel">
       <div class="row">
         <div><div class="name">Voice Shifter</div>
-          <div class="hint">Real-time pitch + timbre disguise</div></div>
+          <div class="hint">Real-time pitch + formant disguise</div></div>
         <span class="status st-off" id="st-voice">off</span>
       </div>
       <div class="row" style="border:none">
@@ -321,14 +324,28 @@ HTML = """<!DOCTYPE html>
           <div class="hint" id="ratioLbl">0.85</div>
         </div>
         <div style="flex:1">
-          <div class="hint">Timbre tilt (dB)</div>
+          <div class="hint">Formant (0.6–1.4, <1 = darker character)</div>
+          <input type="range" id="formant" min="0.6" max="1.4" step="0.01" value="0.90" style="width:100%">
+          <div class="hint" id="formantLbl">0.90</div>
+        </div>
+        <div style="flex:1;margin-left:12px">
+          <div class="hint">Tilt (dB)</div>
           <input type="range" id="tilt" min="-6" max="6" step="0.5" value="1.5" style="width:100%">
           <div class="hint" id="tiltLbl">+1.5</div>
         </div>
       </div>
-      <button class="on wide" onclick="voice('start')">Start Voice Shifter</button>
+      <div class="hint" style="margin:8px 0 6px">Quick presets</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="off" style="font-size:12px;padding:6px 10px" onclick="preset('subtle')">Subtle</button>
+        <button class="off" style="font-size:12px;padding:6px 10px" onclick="preset('deep')">Deep</button>
+        <button class="off" style="font-size:12px;padding:6px 10px" onclick="preset('demon')">Demon</button>
+        <button class="off" style="font-size:12px;padding:6px 10px" onclick="preset('alien')">Alien</button>
+        <button class="off" style="font-size:12px;padding:6px 10px" onclick="preset('chipmunk')">Chipmunk</button>
+        <button class="off" style="font-size:12px;padding:6px 10px" onclick="preset('radio')">Radio</button>
+      </div>
+      <button class="on wide" style="margin-top:10px" onclick="voice('start')">Start Voice Shifter</button>
       <button class="off wide" style="margin-top:8px" onclick="voice('stop')">Stop Voice Shifter</button>
-      <div class="hint2">Picks up your default mic and applies the pitch shift live. Route this output to OBS as your mic source for streaming.</div>
+      <div class="hint2">Pitch changes fundamental; formant changes the vocal-tract character (the "who it sounds like"). Route the output to OBS as your mic source.</div>
     </div>
   </div>
 </div>
@@ -396,12 +413,21 @@ async function setObs(on){
 }
 
 // voice control
+const PRESETS={'subtle':[0.92,0.97,0.5],'deep':[0.80,0.88,2.0],'demon':[0.65,0.80,4.0],'alien':[0.75,1.30,1.0],'chipmunk':[1.30,1.25,-3.0],'radio':[1.00,1.10,3.0]};
+function setRange(id,val){const el=document.getElementById(id);el.value=val;el.dispatchEvent(new Event('input'));}
 document.getElementById('ratio').oninput=e=>document.getElementById('ratioLbl').textContent=e.target.value;
+document.getElementById('formant').oninput=e=>document.getElementById('formantLbl').textContent=e.target.value;
 document.getElementById('tilt').oninput=e=>document.getElementById('tiltLbl').textContent=(+e.target.value>=0?'+':'')+e.target.value;
+function preset(name){
+  const [ratio,formant,tilt]=PRESETS[name];
+  setRange('ratio',ratio);setRange('formant',formant);setRange('tilt',tilt);
+  statusline.textContent='Preset: '+name+' → Start to apply';
+}
 async function voice(act){
   const ratio=document.getElementById('ratio').value;
+  const formant=document.getElementById('formant').value;
   const tilt=document.getElementById('tilt').value;
-  const r=await fetch(`/api/voice/${act}?ratio=${ratio}&tilt=${tilt}`);
+  const r=await fetch(`/api/voice/${act}?ratio=${ratio}&formant=${formant}&tilt=${tilt}`);
   const d=await r.json();
   const el=document.getElementById('st-voice');
   el.textContent=d.running?'on':'off';
@@ -452,7 +478,9 @@ class Handler(BaseHTTPRequestHandler):
             if act == "start":
                 ratio = float(q.get("ratio", ["0.85"])[0])
                 tilt = float(q.get("tilt", ["1.5"])[0])
-                return self._send_json({**voice_start(ratio, tilt), "running": True})
+                formant = float(q["formant"][0]) if q.get("formant") else None
+                preset = q.get("preset", [None])[0] or None
+                return self._send_json({**voice_start(ratio, tilt, formant, preset), "running": True})
             if act == "stop":
                 return self._send_json({**voice_stop(), "running": False})
             return self._send_json({"running": running})
