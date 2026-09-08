@@ -346,12 +346,14 @@ HTML = """<!DOCTYPE html>
         <button class="off" style="font-size:12px;padding:6px 10px" onclick="preset('radio')">Radio</button>
       </div>
       <div class="row" style="border:none">
-        <div class="hint" style="flex:1">OBS output device index (see <code>python voice_shifter.py --list</code>). 0 = default. For OBS capture use a BlackHole virtual cable index.</div>
+        <div class="hint" style="flex:1">OBS output device index (0 = default; use a BlackHole virtual cable index for OBS capture)</div>
         <input type="number" id="outDev" min="0" value="0" style="width:70px;background:#0e1830;border:1px solid rgba(66,133,244,.35);color:#fff;border-radius:8px;padding:6px 8px">
       </div>
+      <button class="off wide" style="margin-top:6px" onclick="listDevices()">List Audio Devices</button>
+      <div class="hint2" id="devList" style="display:none;background:#0e1830;border-radius:8px;padding:10px;font-family:monospace;font-size:11px;white-space:pre-wrap"></div>
       <button class="on wide" style="margin-top:10px" onclick="voice('start')">Start Voice Shifter</button>
       <button class="off wide" style="margin-top:8px" onclick="voice('stop')">Stop Voice Shifter</button>
-      <div class="hint2">Pitch changes fundamental; formant changes the vocal-tract character (the "who it sounds like"). To get it INTO OBS, install <b>BlackHole</b> (free virtual audio cable), set this output device to BlackHole's index, and in OBS add BlackHole as an <b>Audio Input Capture</b> source.</div>
+      <div class="hint2">Pitch changes fundamental; formant changes the vocal-tract character (the "who it sounds like"). To get it INTO OBS, install <b>BlackHole</b> (free virtual audio cable), set the output device above to BlackHole's index, and in OBS add BlackHole as an <b>Audio Input Capture</b> source.</div>
     </div>
   </div>
 </div>
@@ -434,6 +436,20 @@ function preset(name){
   setRange('ratio',ratio);setRange('formant',formant);setRange('tilt',tilt);
   statusline.textContent='Preset: '+name+' → Start to apply';
 }
+async function listDevices(){
+  const box=document.getElementById('devList');
+  try{
+    const r=await fetch('/api/voice/devices');
+    const d=await r.json();
+    if(d.error){ box.textContent='error: '+d.error; box.style.display='block'; return; }
+    let txt='';
+    d.devices.forEach(v=>{
+      txt+=(v.idx)+': '+(v.in?'[IN] ':'      ')+(v.out?'[OUT] ':'      ')+v.name+'\n';
+    });
+    box.textContent='Device list (put the OBS/BlackHole index above):\n'+txt;
+  }catch(e){ box.textContent='error: '+e.message; }
+  box.style.display='block';
+}
 async function voice(act){
   const ratio=document.getElementById('ratio').value;
   const formant=document.getElementById('formant').value;
@@ -487,6 +503,17 @@ class Handler(BaseHTTPRequestHandler):
             act = u.path.split("/api/voice/")[1]
             q = parse_qs(u.query)
             running = bool(_state["voiceproc"] and _state["voiceproc"].poll() is None)
+            if act == "devices":
+                try:
+                    import sounddevice as sd
+                    devs = []
+                    for i, d in enumerate(sd.query_devices()):
+                        devs.append({"idx": i, "name": d["name"],
+                                     "in": d["max_input_channels"] > 0,
+                                     "out": d["max_output_channels"] > 0})
+                    return self._send_json({"devices": devs})
+                except Exception as e:
+                    return self._send_json({"devices": [], "error": str(e)})
             if act == "start":
                 ratio = float(q.get("ratio", ["0.85"])[0])
                 tilt = float(q.get("tilt", ["1.5"])[0])
