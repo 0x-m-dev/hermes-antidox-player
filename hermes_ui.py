@@ -25,12 +25,9 @@ from urllib.parse import urlparse
 import numpy as np
 import cv2
 import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision
 
 PORT = 8711
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODEL = os.path.join(HERE, "models", "face_landmarker.task")
 
 # ---- Hermes theme (BGR) ----
 ACCENT_BLUE = (244, 133, 66)
@@ -40,20 +37,20 @@ BG_TOP = (138, 58, 30)
 BG_BOTTOM = (35, 16, 10)
 NAME = "HERMES"
 
+# Standard 468-landmark face-oval contour.
 FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
              397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
              172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
 
 # ---- shared state ----
 _state = {
-    "landmarker": None,
+    "facemesh": None,
     "lock": threading.Lock(),
-    "last_frame": None,      # last processed BGR frame
-    "ts": 0,
     "obsenabled": False,
     "vcam": None,
-    "playerproc": None,
 }
+
+mp_face_mesh = mp.solutions.face_mesh
 
 
 def build_gradient(w, h):
@@ -64,35 +61,32 @@ def build_gradient(w, h):
     return np.repeat(grad, w, axis=1).copy()
 
 
-def get_landmarker():
+def get_facemesh():
     with _state["lock"]:
-        if _state["landmarker"] is None:
-            # Force CPU inference — mediapipe's Apple Metal/GPU delegate is
-            # unreliable on macOS and crashes with 'Service is unavailable'.
-            base = mp_python.BaseOptions(
-                model_asset_path=MODEL,
-                delegate=mp_python.BaseOptions.Delegate.CPU)
-            opts = vision.FaceLandmarkerOptions(
-                base_options=base, running_mode=vision.RunningMode.VIDEO,
-                num_faces=1, min_face_detection_confidence=0.5,
+        if _state["facemesh"] is None:
+            # CPU inference only — avoids mediapipe's flaky Metal/GPU path on mac.
+            _state["facemesh"] = mp_face_mesh.FaceMesh(
+                static_image_mode=False, max_num_faces=1,
+                refine_landmarks=True, min_detection_confidence=0.5,
                 min_tracking_confidence=0.5)
-            _state["landmarker"] = vision.FaceLandmarker.create_from_options(opts)
-        return _state["landmarker"]
+        return _state["facemesh"]
 
 
 def process_frame(frame_bgr, ts_ms):
     """frame_bgr (h,w,3) -> processed Hermes silhouette BGR frame."""
-    lm = get_landmarker()
+    fm = get_facemesh()
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-    result = lm.detect_for_video(mp_img, timestamp_ms=ts_ms)
+    results = fm.process(rgb)
 
     h, w = frame_bgr.shape[:2]
     out = build_gradient(w, h)
-    if result.face_landmarks:
-        pts = [(p.x, p.y) for p in result.face_landmarks[0]]
+    if results.multi_face_landmarks:
+        lm = results.multi_face_landmarks[0]
         # head oval + neck/shoulders taper
-        poly = [[int(x * w), int(y * h)] for x, y in pts]
+        poly = []
+        for idx in FACE_OVAL:
+            p = lm.landmark[idx]
+            poly.append([int(p.x * w), int(p.y * h)])
         chin = max(poly, key=lambda p: p[1])
         cx0, cy0 = chin
         neck_w = int(w * 0.16)

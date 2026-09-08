@@ -29,16 +29,27 @@ Voice Shifter**, **Open Preview**. Live status readout, logs in `player.log` /
 `voice_shifter.log`. Stops every process from one place. Pure Python stdlib —
 no extra install.
 
-## Setup (macOS)
-The Python code is identical and cross-platform. macOS-specific bits below.
+## Setup (macOS) — IMPORTANT: use Python 3.10–3.12, NOT 3.14
+The stable mediapipe version (0.10.14) only has wheels for Python ≤ 3.12.
+On Python 3.13/3.14 mediapipe breaks (no `solutions`, or crashes on the
+Apple Metal path with `DrishtiMetalHelper … Service is unavailable`).
+This project pins mediapipe==0.10.14 and runs on **CPU only** to avoid that.
 
+One command setup (uses Python 3.12 if present):
 ```bash
-cd anti-dox-webcam
-chmod +x launch_streaming.command run_player_preview.sh
-# Option A (one-click): double-click launch_streaming.command in Finder
-# Option B (manual):    ./launch_streaming.command
+cd hermes-antidox
+bash mac_setup.sh          # creates venv with Python 3.10-3.12 + installs deps
+source .venv/bin/activate
+python3 hermes_ui.py       # browser opens http://localhost:8711 -> Enable Camera
 ```
-Requires Python 3.10+. If the venv/pip step needs it, use `brew install python`.
+
+If you already made a venv with Python 3.14, remove it and re-run setup:
+```bash
+rm -rf .venv
+brew install python@3.12    # if needed
+bash mac_setup.sh
+```
+Or manually: `python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`.
 
 **OBS Virtual Camera on macOS:**
 - OBS Studio 28+ has the virtual camera built in — but on Mac it's an opt-in

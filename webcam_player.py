@@ -20,8 +20,8 @@ import time
 import cv2
 import numpy as np
 import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision
+
+mp_face_mesh = mp.solutions.face_mesh
 
 # ---------------- Hermes theme (white + blue) ----------------
 # NOTE: OpenCV works in BGR. Values below are stored as BGR (blue channel
@@ -34,7 +34,7 @@ BG_BOTTOM     = (35, 16, 10)     # BGR of RGB(10,16,35)    -> gradient bottom (n
 NAME          = "HERMES"
 NAME_ACCENT   = "◆"              # little hermes mark next to the name
 
-# The canonical FaceMesh "face oval" contour indices (478-landmark model).
+# The canonical FaceMesh "face oval" contour indices (468-landmark model).
 FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
              397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
              172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
@@ -49,13 +49,11 @@ def build_gradient(w, h, top=BG_TOP, bottom=BG_BOTTOM):
     return np.repeat(grad, w, axis=1).copy()
 
 
-def draw_silhouette(frame, landmarks, fill=True, scale_x=1.0, scale_y=1.0):
-    """Fill the head+neck+shoulders polygon as the 'you silhouette'."""
+def draw_silhouette(frame, pts_norm, fill=True, scale_x=1.0, scale_y=1.0):
+    """Fill the head+neck+shoulders polygon as the 'you silhouette'.
+    pts_norm: list of (x, y) normalized [0,1] face-oval points (in FACE_OVAL order)."""
     h, w = frame.shape[:2]
-    pts = []
-    for idx in FACE_OVAL:
-        x, y = landmarks[idx]
-        pts.append([int(x * w), int(y * h)])
+    pts = [[int(x * w), int(y * h)] for x, y in pts_norm]
     # extend chin down into neck + shoulders (bust silhouette)
     chin = pts[0] if len(pts) else [0, 0]
     for x, y in pts:
@@ -105,19 +103,11 @@ class HermesWebcam:
         self.height = height
         self.fps = fps
 
-        # Force CPU inference — mediapipe's Apple Metal/GPU delegate is
-        # unreliable on macOS and crashes with 'Service is unavailable'.
-        base = mp_python.BaseOptions(
-            model_asset_path=model_path,
-            delegate=mp_python.BaseOptions.Delegate.CPU)
-        opts = vision.FaceLandmarkerOptions(
-            base_options=base,
-            running_mode=vision.RunningMode.VIDEO,  # synchronous, low-latency
-            num_faces=1,
-            min_face_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
-        self.landmarker = vision.FaceLandmarker.create_from_options(opts)
+        # CPU FaceMesh — avoids mediapipe's flaky Metal/GPU path on mac.
+        self.facemesh = mp_face_mesh.FaceMesh(
+            static_image_mode=False, max_num_faces=1,
+            refine_landmarks=True, min_detection_confidence=0.5,
+            min_tracking_confidence=0.5)
         self.gradient = build_gradient(width, height)
 
     # -- capture ---------------------------------------------------------
@@ -135,20 +125,23 @@ class HermesWebcam:
     # -- one frame -------------------------------------------------------
     def process(self, frame_bgr, ts_ms):
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self.landmarker.detect_for_video(mp_img, timestamp_ms=ts_ms)
+        results = self.facemesh.process(rgb)
 
         out = self.gradient.copy()
-        if result.face_landmarks:
-            # landmark: NormalizedLandmark (x,y,z) in [0,1]
-            pts = [(lm.x, lm.y) for lm in result.face_landmarks[0]]
+        if results.multi_face_landmarks:
+            lm = results.multi_face_landmarks[0]
+            pts = []
+            for idx in FACE_OVAL:
+                p = lm.landmark[idx]
+                pts.append((p.x, p.y))
             draw_silhouette(out, pts)
         draw_glow_border(out)
         draw_nameplate(out)
         return out
 
     def close(self):
-        self.landmarker.close()
+        if getattr(self, "facemesh", None):
+            self.facemesh.close()
 
 
 class MockCamera:
