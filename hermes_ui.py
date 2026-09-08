@@ -381,10 +381,14 @@ function stopCam(){
   camOn=false;
   if(raf) cancelAnimationFrame(raf);
   if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  // drop the cached video element so a re-enable gets a fresh live stream
+  if(vidEl){ vidEl.srcObject=null; vidEl=null; }
+  if(lastURL){ URL.revokeObjectURL(lastURL); lastURL=null; }
   document.getElementById('camBtn').textContent='Enable Camera';
   document.getElementById('camBtn').className='on wide';
   document.getElementById('camoff').style.display='block';
   document.getElementById('view').style.display='none';
+  document.getElementById('view').src='';
   document.getElementById('statusline').textContent='Camera off.';
 }
 
