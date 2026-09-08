@@ -217,7 +217,7 @@ def send_to_obs(bgr):
         s["obsenabled"] = False
 
 
-def voice_start(ratio, tilt, formant=None, preset=None):
+def voice_start(ratio, tilt, formant=None, preset=None, out_device=None):
     """Launch the voice shifter subprocess (blocking stream)."""
     s = _state
     p = s["voiceproc"]
@@ -230,6 +230,8 @@ def voice_start(ratio, tilt, formant=None, preset=None):
         args += ["--formant", str(formant)]
     if preset:
         args += ["--preset", preset]
+    if out_device is not None:
+        args += ["--out-device", str(out_device)]
     logf = open(os.path.join(HERE, "voice.log"), "ab")
     proc = subprocess.Popen(args, cwd=HERE, stdout=logf, stderr=subprocess.STDOUT)
     s["voiceproc"] = proc
@@ -343,9 +345,13 @@ HTML = """<!DOCTYPE html>
         <button class="off" style="font-size:12px;padding:6px 10px" onclick="preset('chipmunk')">Chipmunk</button>
         <button class="off" style="font-size:12px;padding:6px 10px" onclick="preset('radio')">Radio</button>
       </div>
+      <div class="row" style="border:none">
+        <div class="hint" style="flex:1">OBS output device index (see <code>python voice_shifter.py --list</code>). 0 = default. For OBS capture use a BlackHole virtual cable index.</div>
+        <input type="number" id="outDev" min="0" value="0" style="width:70px;background:#0e1830;border:1px solid rgba(66,133,244,.35);color:#fff;border-radius:8px;padding:6px 8px">
+      </div>
       <button class="on wide" style="margin-top:10px" onclick="voice('start')">Start Voice Shifter</button>
       <button class="off wide" style="margin-top:8px" onclick="voice('stop')">Stop Voice Shifter</button>
-      <div class="hint2">Pitch changes fundamental; formant changes the vocal-tract character (the "who it sounds like"). Route the output to OBS as your mic source.</div>
+      <div class="hint2">Pitch changes fundamental; formant changes the vocal-tract character (the "who it sounds like"). To get it INTO OBS, install <b>BlackHole</b> (free virtual audio cable), set this output device to BlackHole's index, and in OBS add BlackHole as an <b>Audio Input Capture</b> source.</div>
     </div>
   </div>
 </div>
@@ -381,27 +387,32 @@ function stopCam(){
 }
 
 const canvas=document.createElement('canvas');
+let vidEl=null, lastURL=null;
 async function processLoop(){
   if(!camOn) return;
-  const v = document.createElement('video');
-  v.srcObject = stream; v.muted=true; await v.play();
-  canvas.width=v.videoWidth||640; canvas.height=v.videoHeight||480;
-  canvas.getContext('2d').drawImage(v,0,0);
-  canvas.toBlob(async (blob)=>{
-    if(!blob) return;
-    const fd=new FormData(); fd.append('frame', blob, 'f.jpg');
-    try{
-      const resp=await fetch('/api/process',{method:'POST',body:fd});
-      const jpg=await resp.blob();
-      document.getElementById('view').src=URL.createObjectURL(jpg);
-      const dt=(performance.now()-t0);
-      document.getElementById('statusline').textContent='Live · processing locally · ~'+Math.round(1000/Math.max(dt,1))+' fps';
-    }catch(e){
-      document.getElementById('statusline').textContent='error: '+e.message;
-    }
-  },'image/jpeg',0.8);
-  t0=performance.now();
-  raf=requestAnimationFrame(processLoop);
+  if(!vidEl){ vidEl=document.createElement('video'); vidEl.muted=true; vidEl.srcObject=stream; }
+  try{
+    if(vidEl.readyState < 2) await vidEl.play();
+    if(!vidEl.videoWidth) vidEl.play();
+    canvas.width=vidEl.videoWidth||640; canvas.height=vidEl.videoHeight||480;
+    canvas.getContext('2d').drawImage(vidEl,0,0);
+    canvas.toBlob((blob)=>{
+      if(!blob){ setTimeout(processLoop,30); return; }
+      const fd=new FormData(); fd.append('frame', blob, 'f.jpg');
+      fetch('/api/process',{method:'POST',body:fd}).then(r=>r.blob()).then(jpg=>{
+        const el=document.getElementById('view');
+        if(lastURL) URL.revokeObjectURL(lastURL);
+        lastURL=URL.createObjectURL(jpg);
+        el.src=lastURL;
+        document.getElementById('statusline').textContent='Live · processing locally · ~'+Math.round(1000/Math.max(performance.now()-t0,1))+' fps';
+      }).catch(e=>document.getElementById('statusline').textContent='error: '+e.message)
+        .finally(()=>{ t0=performance.now(); setTimeout(processLoop, 30); });
+    },'image/jpeg',0.8);
+    t0=performance.now();
+  }catch(e){
+    document.getElementById('statusline').textContent='cam: '+e.message;
+    setTimeout(processLoop,100);
+  }
 }
 let t0=performance.now();
 
@@ -427,7 +438,8 @@ async function voice(act){
   const ratio=document.getElementById('ratio').value;
   const formant=document.getElementById('formant').value;
   const tilt=document.getElementById('tilt').value;
-  const r=await fetch(`/api/voice/${act}?ratio=${ratio}&formant=${formant}&tilt=${tilt}`);
+  const outDev=document.getElementById('outDev').value;
+  const r=await fetch(`/api/voice/${act}?ratio=${ratio}&formant=${formant}&tilt=${tilt}&out_device=${outDev}`);
   const d=await r.json();
   const el=document.getElementById('st-voice');
   el.textContent=d.running?'on':'off';
@@ -480,7 +492,8 @@ class Handler(BaseHTTPRequestHandler):
                 tilt = float(q.get("tilt", ["1.5"])[0])
                 formant = float(q["formant"][0]) if q.get("formant") else None
                 preset = q.get("preset", [None])[0] or None
-                return self._send_json({**voice_start(ratio, tilt, formant, preset), "running": True})
+                out_device = int(q["out_device"][0]) if q.get("out_device") else None
+                return self._send_json({**voice_start(ratio, tilt, formant, preset, out_device), "running": True})
             if act == "stop":
                 return self._send_json({**voice_stop(), "running": False})
             return self._send_json({"running": running})

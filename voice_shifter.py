@@ -218,10 +218,12 @@ def process_file(in_path, out_path, ratio, formant, tilt, sr=0):
 # ---------------------------------------------------------------------------
 # Real-time streaming
 # ---------------------------------------------------------------------------
-def stream(ratio, formant, tilt, device=None, blocksize=1024, sr=44100):
+def stream(ratio, formant, tilt, device=None, out_device=None, blocksize=1024, sr=44100):
     import sounddevice as sd
-    if device is not None:
-        sd.default.device = device
+    # device = input (mic); out_device = where processed audio goes
+    dev = (device, out_device) if out_device is not None else device
+    if dev is not None:
+        sd.default.device = dev
 
     def callback(indata, outdata, frames, time_info, status):
         mono = indata[:, 0] if indata.ndim == 2 else indata
@@ -235,8 +237,9 @@ def stream(ratio, formant, tilt, device=None, blocksize=1024, sr=44100):
 
     print(f"[hermes] voice shifter live  ratio={ratio}  formant={formant}  "
           f"tilt={tilt:+}dB  sr={sr}  blocksize={blocksize}")
+    print(f"[hermes] input={device} output={out_device}")
     print("[hermes] press Ctrl+C to stop")
-    with sd.Stream(device=device, samplerate=sr, blocksize=blocksize,
+    with sd.Stream(device=dev, samplerate=sr, blocksize=blocksize,
                    channels=1, callback=callback):
         while True:
             sd.sleep(1000)
@@ -318,7 +321,10 @@ def main():
     ap.add_argument("--list", action="store_true", help="list audio devices")
     ap.add_argument("--file", help="offline mode: input wav")
     ap.add_argument("--out", default="shifted.wav", help="offline output wav")
-    ap.add_argument("--device", type=int, help="audio device index")
+    ap.add_argument("--device", type=int, help="audio input device index (mic)")
+    ap.add_argument("--out-device", type=int,
+                    help="audio OUTPUT device index (where shifted audio goes, "
+                         "e.g. a BlackHole virtual cable OBS will capture)")
     ap.add_argument("--test", action="store_true", help="run DSP self-test")
     args = ap.parse_args()
 
@@ -345,7 +351,8 @@ def main():
               f"{len(x)/sr:.2f}s, ratio={ratio}, formant={formant}, tilt={tilt:+}dB")
         return
 
-    stream(ratio, formant, tilt, device=args.device)
+    stream(ratio, formant, tilt, device=args.device,
+           out_device=args.out_device)
 
 
 if __name__ == "__main__":
