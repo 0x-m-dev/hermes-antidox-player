@@ -49,13 +49,32 @@ NOSE = [168, 6, 197, 195, 5, 4, 1, 19, 94]
 FEATURE = (255, 255, 255)  # white feature lines (Hermes brand)
 
 
-def build_gradient(w, h, top=BG_TOP, bottom=BG_BOTTOM):
-    """Vertical gradient background (bgr). Precompute once per resolution."""
-    top = np.array(top, dtype=np.uint8)
-    bottom = np.array(bottom, dtype=np.uint8)
-    t = np.linspace(0.0, 1.0, h)[:, None, None]
-    grad = (top * (1 - t) + bottom * t).astype(np.uint8)
-    return np.repeat(grad, w, axis=1).copy()
+def build_gradient(w, h, t=0.0, top=BG_TOP, bottom=BG_BOTTOM):
+    """Slow-drifting gradient background (BGR). t = seconds since start."""
+    top = np.array(top, dtype=np.uint8).astype(np.float32)
+    bottom = np.array(bottom, dtype=np.uint8).astype(np.float32)
+    hh = np.linspace(0.0, 1.0, h)[:, None, None]
+    # slow breathing
+    breath = 0.5 + 0.5 * np.sin(t * 0.8)
+    top_adj = top * (1.0 - 0.06 * breath)
+    bottom_adj = bottom * (1.0 + 0.06 * breath)
+    # drifting midpoint
+    drift = (np.sin(t * 0.25) + 1.0) / 2.0
+    pos = np.clip(hh + (drift - 0.5) * 0.3, 0.0, 1.0)
+    grad = top_adj * (1 - pos) + bottom_adj * pos
+    base = np.repeat(grad.astype(np.uint8), w, axis=1).copy()
+    # two soft wandering glows
+    cy1 = int(h * (0.3 + 0.15 * np.sin(t * 0.18)))
+    cx1 = int(w * (0.25 + 0.12 * np.cos(t * 0.12)))
+    cy2 = int(h * (0.75 + 0.12 * np.cos(t * 0.15)))
+    cx2 = int(w * (0.78 + 0.10 * np.sin(t * 0.10)))
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    r1 = np.sqrt((xx - cx1) ** 2 + (yy - cy1) ** 2) / (0.6 * max(w, h))
+    r2 = np.sqrt((xx - cx2) ** 2 + (yy - cy2) ** 2) / (0.6 * max(w, h))
+    glow = np.clip(np.clip(1.0 - r1, 0, 1) ** 2 + np.clip(1.0 - r2, 0, 1) ** 2, 0, 1)[..., None]
+    blend = (np.zeros((h, w, 3), dtype=np.float32) + 255.0) * glow * 0.06
+    base = cv2.add(base, blend.astype(np.uint8))
+    return base
 
 
 def draw_silhouette(frame, pts_norm, fill=True, scale_x=1.0, scale_y=1.0):
@@ -140,7 +159,6 @@ class HermesWebcam:
             static_image_mode=False, max_num_faces=1,
             refine_landmarks=True, min_detection_confidence=0.5,
             min_tracking_confidence=0.5)
-        self.gradient = build_gradient(width, height)
 
     # -- capture ---------------------------------------------------------
     def open_camera(self, mock=False):
@@ -158,8 +176,9 @@ class HermesWebcam:
     def process(self, frame_bgr, ts_ms):
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         results = self.facemesh.process(rgb)
+        h, w = frame_bgr.shape[:2]
 
-        out = self.gradient.copy()
+        out = build_gradient(w, h, t=ts_ms / 1000.0)
         if results.multi_face_landmarks:
             lm = results.multi_face_landmarks[0]
             pts = []

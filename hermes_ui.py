@@ -54,12 +54,42 @@ _state = {
 mp_face_mesh = mp.solutions.face_mesh
 
 
-def build_gradient(w, h):
-    top = np.array(BG_TOP, dtype=np.uint8)
-    bottom = np.array(BG_BOTTOM, dtype=np.uint8)
-    t = np.linspace(0.0, 1.0, h)[:, None, None]
-    grad = (top * (1 - t) + bottom * t).astype(np.uint8)
-    return np.repeat(grad, w, axis=1).copy()
+def build_gradient(w, h, t=0.0):
+    """Base gradient with a slow vertical drift + soft ambient glow layers.
+    t = seconds since start; drives the slow animation."""
+    top = np.array(BG_TOP, dtype=np.uint8).astype(np.float32)
+    bottom = np.array(BG_BOTTOM, dtype=np.uint8).astype(np.float32)
+    hh = np.linspace(0.0, 1.0, h)[:, None, None]
+
+    # slow breathing: lighten/darken the whole field over ~8s
+    breath = 0.5 + 0.5 * np.sin(t * 0.8)
+    top_adj = top * (1.0 - 0.06 * breath)
+    bottom_adj = bottom * (1.0 + 0.06 * breath)
+
+    # drifting gradient midpoint creates gentle vertical motion
+    drift = (np.sin(t * 0.25) + 1.0) / 2.0
+    pos = np.clip(hh + (drift - 0.5) * 0.3, 0.0, 1.0)
+    grad = top_adj * (1 - pos) + bottom_adj * pos
+    base = np.repeat(grad.astype(np.uint8), w, axis=1).copy()
+
+    # soft ambient radial glows that wander slowly (2 large soft blobs)
+    cy1 = int(h * (0.3 + 0.15 * np.sin(t * 0.18)))
+    cx1 = int(w * (0.25 + 0.12 * np.cos(t * 0.12)))
+    cy2 = int(h * (0.75 + 0.12 * np.cos(t * 0.15)))
+    cx2 = int(w * (0.78 + 0.10 * np.sin(t * 0.10)))
+    glow = np.zeros((h, w), dtype=np.float32)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    r1 = np.sqrt((xx - cx1) ** 2 + (yy - cy1) ** 2) / (0.6 * max(w, h))
+    r2 = np.sqrt((xx - cx2) ** 2 + (yy - cy2) ** 2) / (0.6 * max(w, h))
+    glow += np.clip(1.0 - r1, 0, 1) ** 2
+    glow += np.clip(1.0 - r2, 0, 1) ** 2
+    glow = np.clip(glow, 0, 1)[..., None]
+    # add warm-white light toward the center (subtle, keeps blue dominant)
+    overlay = np.zeros((h, w, 3), dtype=np.uint8)
+    overlay[:] = (255, 255, 255)
+    blend = (overlay.astype(np.float32) * glow * 0.06).astype(np.uint8)
+    base = cv2.add(base, blend)
+    return base
 
 
 # FaceMesh landmark index groups for facial features (468-point model)
@@ -121,7 +151,7 @@ def process_frame(frame_bgr, ts_ms):
     results = fm.process(rgb)
 
     h, w = frame_bgr.shape[:2]
-    out = build_gradient(w, h)
+    out = build_gradient(w, h, t=ts_ms / 1000.0)
     if results.multi_face_landmarks:
         lm = results.multi_face_landmarks[0]
         # head oval + neck/shoulders taper
