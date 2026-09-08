@@ -39,6 +39,16 @@ FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
              397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
              172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
 
+# Facial feature landmark groups (468-point model)
+EYES_LEFT  = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+EYES_RIGHT = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+BROW_LEFT  = [46, 53, 52, 65, 55]
+BROW_RIGHT = [285, 295, 282, 283, 276]
+LIPS_OUTER = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185]
+LIPS_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95]
+NOSE = [168, 6, 197, 195, 5, 4, 1, 19, 94]
+FEATURE = (12, 20, 45)  # BGR dark navy feature lines (bolder) on the blue fill
+
 
 def build_gradient(w, h, top=BG_TOP, bottom=BG_BOTTOM):
     """Vertical gradient background (bgr). Precompute once per resolution."""
@@ -72,6 +82,30 @@ def draw_silhouette(frame, pts_norm, fill=True, scale_x=1.0, scale_y=1.0):
     # white inner outline
     cv2.polylines(frame, [pts], True, OUTLINE_WHITE, 2, cv2.LINE_AA)
     return frame
+
+
+def draw_features(out, lm, w, h):
+    """Draw eyes, eyebrows, mouth and nose as stylized outlines."""
+    def polyline(idxs, close=True, thick=3):
+        p = [(int(lm.landmark[i].x * w), int(lm.landmark[i].y * h)) for i in idxs]
+        cv2.polylines(out, [np.array(p, np.int32).reshape(-1, 1, 2)],
+                      close, FEATURE, thick, cv2.LINE_AA)
+    for e in (EYES_LEFT, EYES_RIGHT):
+        p = np.array([(int(lm.landmark[i].x * w), int(lm.landmark[i].y * h)) for i in e],
+                     np.int32).reshape(-1, 1, 2)
+        cv2.fillPoly(out, [p], FEATURE)
+        cv2.polylines(out, [p], True, OUTLINE_WHITE, 1, cv2.LINE_AA)
+    polyline(BROW_LEFT, close=False, thick=3)
+    polyline(BROW_RIGHT, close=False, thick=3)
+    p_out = np.array([(int(lm.landmark[i].x * w), int(lm.landmark[i].y * h)) for i in LIPS_OUTER],
+                     np.int32).reshape(-1, 1, 2)
+    cv2.polylines(out, [p_out], True, FEATURE, 3, cv2.LINE_AA)
+    p_in = np.array([(int(lm.landmark[i].x * w), int(lm.landmark[i].y * h)) for i in LIPS_INNER],
+                    np.int32).reshape(-1, 1, 2)
+    cv2.fillPoly(out, [p_in], FEATURE)
+    polyline(NOSE, close=False, thick=3)
+    nx, ny = int(lm.landmark[4].x * w), int(lm.landmark[4].y * h)
+    cv2.circle(out, (nx, ny), max(2, int(w * 0.006)), FEATURE, -1)
 
 
 def draw_glow_border(frame, color=OUTLINE_WHITE, width=3):
@@ -135,6 +169,8 @@ class HermesWebcam:
                 p = lm.landmark[idx]
                 pts.append((p.x, p.y))
             draw_silhouette(out, pts)
+            h, w = out.shape[:2]
+            draw_features(out, lm, w, h)
         draw_glow_border(out)
         draw_nameplate(out)
         return out
