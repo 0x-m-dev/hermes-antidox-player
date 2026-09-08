@@ -1,0 +1,5 @@
+opencv-python>=4.8
+mediapipe>=0.10.14
+numpy>=1.24
+pyvirtualcam>=0.15
+sounddevice>=0.4.6
